@@ -6,16 +6,20 @@ import {
   X,
   Home,
   CalendarDays,
+  List,
   UserPlus,
   LogIn,
   LayoutDashboard,
   Stethoscope,
+  Users,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const navLinks = [
   { label: "Home", href: "/", icon: Home },
   { label: "Book Appointment", href: "/book", icon: CalendarDays },
+  { label: "My Appointments", href: "/appointments", icon: List },
+  { label: "Doctors", href: "/doctors", icon: Users },
   { label: "Register", href: "/register", icon: UserPlus },
   { label: "Login", href: "/login", icon: LogIn },
   { label: "Admin", href: "/admin", icon: LayoutDashboard },
