@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard,
@@ -19,37 +20,79 @@ import {
   CalendarCheck,
   AlertCircle,
   FileText,
+  LogOut,
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, subMonths, addMonths } from "date-fns";
-import { appointments, patients, doctors, updateAppointment, cancelAppointment } from "../data/mockData";
+import { supabase, type Appointment, type Doctor, type Patient } from "../lib/supabase";
+import { useAuth } from "../lib/auth";
 import { cn } from "../lib/utils";
 
 type Tab = "dashboard" | "appointments" | "patients" | "doctors" | "reports";
+
+type AppointmentWithDoctor = Appointment & { doctor?: Doctor };
 
 export default function Admin() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedMonth, setSelectedMonth] = useState(new Date());
+  const [appointments, setAppointments] = useState<AppointmentWithDoctor[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    async function fetchData() {
+      if (!user) return;
+      const { data: appointmentsData } = await supabase
+        .from("appointments")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+      const { data: patientsData } = await supabase
+        .from("patients")
+        .select("*")
+        .eq("user_id", user.id);
+      const { data: doctorsData } = await supabase
+        .from("doctors")
+        .select("*")
+        .order("name");
+
+      if (appointmentsData && doctorsData) {
+        const appointmentWithDoctors = appointmentsData.map((apt) => ({
+          ...apt,
+          doctor: doctorsData.find((d) => d.id === apt.doctor_id),
+        }));
+        setAppointments(appointmentWithDoctors);
+      }
+      if (patientsData) setPatients(patientsData);
+      if (doctorsData) setDoctors(doctorsData);
+      setLoading(false);
+    }
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user && !loading) {
+      navigate("/login");
+    }
+  }, [user, loading, navigate]);
 
   const filteredAppointments = useMemo(() => {
     return appointments
       .filter((a) => {
         const matchesSearch =
-          a.patientName.toLowerCase().includes(search.toLowerCase()) ||
-          a.doctorName.toLowerCase().includes(search.toLowerCase());
+          a.patient_name.toLowerCase().includes(search.toLowerCase()) ||
+          a.doctor?.name?.toLowerCase().includes(search.toLowerCase()) ||
+          "";
         const matchesStatus = statusFilter === "all" || a.status === statusFilter;
         return matchesSearch && matchesStatus;
-      })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [search, statusFilter]);
-
-  const filteredPatients = useMemo(() => {
-    return patients.filter((p) =>
-      p.fullName.toLowerCase().includes(search.toLowerCase()) ||
-      p.email.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [search]);
+      });
+  }, [search, statusFilter, appointments]);
 
   const stats = useMemo(() => {
     const total = appointments.length;
@@ -57,7 +100,7 @@ export default function Admin() {
     const completed = appointments.filter((a) => a.status === "completed").length;
     const cancelled = appointments.filter((a) => a.status === "cancelled").length;
     return { total, scheduled, completed, cancelled };
-  }, []);
+  }, [appointments]);
 
   const monthStart = startOfMonth(selectedMonth);
   const monthEnd = endOfMonth(selectedMonth);
@@ -71,7 +114,7 @@ export default function Admin() {
       }
     });
     return counts;
-  }, []);
+  }, [appointments]);
 
   const statusColor: Record<string, string> = {
     scheduled: "bg-amber-50 text-amber-700 border-amber-200",
@@ -90,10 +133,32 @@ export default function Admin() {
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { key: "appointments", label: "Appointments", icon: CalendarDays },
-    { key: "patients", label: "Patients", icon: Users },
+    { key: "patients", label: "Profile", icon: Users },
     { key: "doctors", label: "Doctors", icon: Stethoscope },
     { key: "reports", label: "Reports", icon: BarChart3 },
   ];
+
+  async function handleStatusUpdate(id: string, status: string) {
+    await supabase.from("appointments").update({ status }).eq("id", id);
+    setAppointments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: status as Appointment["status"] } : a))
+    );
+  }
+
+  async function handleSignOut() {
+    await signOut();
+    navigate("/");
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-sm text-slate-500">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -102,7 +167,7 @@ export default function Admin() {
         <aside className="lg:w-64">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 px-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Administration
+              Your Dashboard
             </div>
             <nav className="space-y-1">
               {tabs.map((t) => {
@@ -125,6 +190,15 @@ export default function Admin() {
                 );
               })}
             </nav>
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <button
+                onClick={handleSignOut}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              >
+                <LogOut size={18} />
+                Sign Out
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -139,7 +213,7 @@ export default function Admin() {
                 exit={{ opacity: 0, y: -10 }}
               >
                 <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
-                <p className="text-sm text-slate-500">Overview of clinic operations.</p>
+                <p className="text-sm text-slate-500">Overview of your appointments.</p>
 
                 <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {[
@@ -177,22 +251,27 @@ export default function Admin() {
                       {appointments.slice(0, 5).map((a) => (
                         <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
                           <div>
-                            <div className="text-sm font-medium text-slate-900">{a.patientName}</div>
-                            <div className="text-xs text-slate-500">{a.doctorName} &middot; {a.specialty}</div>
+                            <div className="text-sm font-medium text-slate-900">{a.doctor?.name}</div>
+                            <div className="text-xs text-slate-500">{a.doctor?.specialty} / {a.date}</div>
                           </div>
                           <span className={cn("rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", statusColor[a.status])}>
                             {a.status}
                           </span>
                         </div>
                       ))}
+                      {appointments.length === 0 && (
+                        <div className="text-sm text-slate-400 text-center py-4">
+                          No appointments yet
+                        </div>
+                      )}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                     <h3 className="text-sm font-bold text-slate-900">Doctors Overview</h3>
                     <div className="mt-4 space-y-3">
-                      {doctors.map((d) => {
-                        const count = appointments.filter((a) => a.doctorId === d.id && a.status !== "cancelled").length;
+                      {doctors.slice(0, 5).map((d) => {
+                        const count = appointments.filter((a) => a.doctor_id === d.id && a.status !== "cancelled").length;
                         return (
                           <div key={d.id} className="flex items-center gap-3">
                             <img src={d.image} alt={d.name} className="h-9 w-9 rounded-full object-cover" />
@@ -218,7 +297,7 @@ export default function Admin() {
                 exit={{ opacity: 0, y: -10 }}
               >
                 <h1 className="text-2xl font-bold text-slate-900">Appointments</h1>
-                <p className="text-sm text-slate-500">Manage and track all appointments.</p>
+                <p className="text-sm text-slate-500">Manage and track all your appointments.</p>
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
                   <div className="relative flex-1">
@@ -226,7 +305,7 @@ export default function Admin() {
                     <input
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search by patient or doctor..."
+                      placeholder="Search by doctor..."
                       className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
                     />
                   </div>
@@ -251,8 +330,8 @@ export default function Admin() {
                     <table className="w-full text-left text-sm">
                       <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                         <tr>
-                          <th className="px-4 py-3">Patient</th>
                           <th className="px-4 py-3">Doctor</th>
+                          <th className="px-4 py-3">Patient</th>
                           <th className="px-4 py-3">Date</th>
                           <th className="px-4 py-3">Time</th>
                           <th className="px-4 py-3">Status</th>
@@ -263,12 +342,12 @@ export default function Admin() {
                         {filteredAppointments.map((a) => (
                           <tr key={a.id} className="hover:bg-slate-50">
                             <td className="px-4 py-3">
-                              <div className="font-medium text-slate-900">{a.patientName}</div>
-                              <div className="text-xs text-slate-400">{a.patientEmail}</div>
+                              <div className="font-medium text-slate-900">{a.doctor?.name}</div>
+                              <div className="text-xs text-slate-400">{a.doctor?.specialty}</div>
                             </td>
                             <td className="px-4 py-3">
-                              <div className="font-medium text-slate-900">{a.doctorName}</div>
-                              <div className="text-xs text-slate-400">{a.specialty}</div>
+                              <div className="font-medium text-slate-900">{a.patient_name}</div>
+                              <div className="text-xs text-slate-400">{a.patient_email}</div>
                             </td>
                             <td className="px-4 py-3 text-slate-600">{a.date}</td>
                             <td className="px-4 py-3 text-slate-600">{a.time}</td>
@@ -283,13 +362,13 @@ export default function Admin() {
                                 {a.status === "scheduled" && (
                                   <>
                                     <button
-                                      onClick={() => updateAppointment(a.id, { status: "completed" })}
+                                      onClick={() => handleStatusUpdate(a.id, "completed")}
                                       className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
                                     >
                                       Complete
                                     </button>
                                     <button
-                                      onClick={() => cancelAppointment(a.id)}
+                                      onClick={() => handleStatusUpdate(a.id, "cancelled")}
                                       className="rounded-md bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
                                     >
                                       Cancel
@@ -321,45 +400,48 @@ export default function Admin() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
               >
-                <h1 className="text-2xl font-bold text-slate-900">Patients</h1>
-                <p className="text-sm text-slate-500">Registered patients directory.</p>
+                <h1 className="text-2xl font-bold text-slate-900">Your Profile</h1>
+                <p className="text-sm text-slate-500">Your patient information.</p>
 
-                <div className="mt-6">
-                  <div className="relative max-w-md">
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search patients..."
-                      className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {filteredPatients.map((p) => (
+                <div className="mt-6 space-y-4">
+                  {patients.map((p) => (
                     <div key={p.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 mb-4">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-teal-100 text-teal-700 font-bold text-sm">
-                          {p.fullName.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                          {p.full_name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                         </div>
                         <div>
-                          <div className="font-semibold text-slate-900">{p.fullName}</div>
-                          <div className="text-xs text-slate-500">{p.email}</div>
+                          <div className="font-semibold text-slate-900">{p.full_name}</div>
+                          <div className="text-xs text-slate-500">Registered on {format(new Date(p.created_at), "MMMM d, yyyy")}</div>
                         </div>
                       </div>
-                      <div className="mt-4 space-y-1 text-xs text-slate-500">
-                        <div>Phone: {p.phone}</div>
-                        <div>DOB: {p.dateOfBirth}</div>
-                        <div>Gender: {p.gender}</div>
-                        <div className="truncate">Address: {p.address}</div>
-                        <div>Emergency: {p.emergencyContact}</div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="text-sm">
+                          <span className="text-slate-500">Phone:</span>{" "}
+                          <span className="text-slate-900">{p.phone}</span>
+                        </div>
+                        <div className="text-sm">
+                          <span className="text-slate-500">Date of Birth:</span>{" "}
+                          <span className="text-slate-900">{p.date_of_birth}</span>
+                        </div>
+                        <div className="text-sm">
+                          <span className="text-slate-500">Gender:</span>{" "}
+                          <span className="text-slate-900">{p.gender}</span>
+                        </div>
+                        <div className="text-sm">
+                          <span className="text-slate-500">Emergency Contact:</span>{" "}
+                          <span className="text-slate-900">{p.emergency_contact}</span>
+                        </div>
+                        <div className="text-sm sm:col-span-2">
+                          <span className="text-slate-500">Address:</span>{" "}
+                          <span className="text-slate-900">{p.address}</span>
+                        </div>
                       </div>
                     </div>
                   ))}
-                  {filteredPatients.length === 0 && (
-                    <div className="col-span-full rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-                      No patients found.
+                  {patients.length === 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
+                      No profile information found. Complete registration to see your profile.
                     </div>
                   )}
                 </div>
@@ -374,11 +456,11 @@ export default function Admin() {
                 exit={{ opacity: 0, y: -10 }}
               >
                 <h1 className="text-2xl font-bold text-slate-900">Doctors</h1>
-                <p className="text-sm text-slate-500">Manage provider schedules and availability.</p>
+                <p className="text-sm text-slate-500">Available healthcare providers.</p>
 
                 <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {doctors.map((d) => {
-                    const appts = appointments.filter((a) => a.doctorId === d.id);
+                    const appts = appointments.filter((a) => a.doctor_id === d.id);
                     return (
                       <div key={d.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="flex items-center gap-3">
@@ -391,7 +473,7 @@ export default function Admin() {
                         <div className="mt-4">
                           <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Available Days</div>
                           <div className="mt-1 flex flex-wrap gap-1">
-                            {d.availableDays.map((day) => (
+                            {d.available_days.map((day) => (
                               <span key={day} className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
                                 {day}
                               </span>
@@ -401,7 +483,7 @@ export default function Admin() {
                         <div className="mt-3">
                           <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Hours</div>
                           <div className="mt-1 flex flex-wrap gap-1">
-                            {d.availableHours.map((h) => (
+                            {d.available_hours.map((h) => (
                               <span key={h} className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-medium text-teal-700">
                                 {h}
                               </span>
@@ -427,7 +509,7 @@ export default function Admin() {
                 exit={{ opacity: 0, y: -10 }}
               >
                 <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
-                <p className="text-sm text-slate-500">Administrative reports and analytics.</p>
+                <p className="text-sm text-slate-500">Your appointment analytics.</p>
 
                 <div className="mt-6 flex items-center gap-3">
                   <button
@@ -505,7 +587,7 @@ export default function Admin() {
                   <div className="mt-4 space-y-2 text-sm text-slate-600">
                     <div className="flex items-start gap-2">
                       <FileText size={16} className="mt-0.5 text-teal-600" />
-                      <span>Total appointments recorded: <strong>{stats.total}</strong></span>
+                      <span>Total appointments: <strong>{stats.total}</strong></span>
                     </div>
                     <div className="flex items-start gap-2">
                       <AlertCircle size={16} className="mt-0.5 text-amber-600" />
@@ -521,11 +603,11 @@ export default function Admin() {
                     </div>
                     <div className="flex items-start gap-2">
                       <Users size={16} className="mt-0.5 text-teal-600" />
-                      <span>Registered patients: <strong>{patients.length}</strong></span>
+                      <span>Profile records: <strong>{patients.length}</strong></span>
                     </div>
                     <div className="flex items-start gap-2">
                       <Stethoscope size={16} className="mt-0.5 text-teal-600" />
-                      <span>Active doctors: <strong>{doctors.length}</strong></span>
+                      <span>Available doctors: <strong>{doctors.length}</strong></span>
                     </div>
                   </div>
                 </div>

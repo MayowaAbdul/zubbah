@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CalendarDays,
@@ -11,18 +12,41 @@ import {
   User,
 } from "lucide-react";
 import { format, addDays, startOfWeek, isSameDay } from "date-fns";
-import { doctors, addAppointment, appointments } from "../data/mockData";
+import { supabase, type Doctor } from "../lib/supabase";
+import { useAuth } from "../lib/auth";
 import { cn } from "../lib/utils";
 
 const weekDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export default function Book() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", email: "", phone: "", notes: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    async function fetchDoctors() {
+      const { data, error } = await supabase.from("doctors").select("*").order("name");
+      if (!error && data) {
+        setDoctors(data);
+      }
+      setLoading(false);
+    }
+    fetchDoctors();
+  }, []);
+
+  useEffect(() => {
+    if (!user && !loading) {
+      navigate("/login");
+    }
+  }, [user, loading, navigate]);
 
   const doctor = doctors.find((d) => d.id === selectedDoctor);
 
@@ -32,11 +56,8 @@ export default function Book() {
   const availableTimes = useMemo(() => {
     if (!doctor || !selectedDate) return [];
     const dayName = weekDays[selectedDate.getDay()];
-    if (!doctor.availableDays.includes(dayName)) return [];
-    const taken = appointments
-      .filter((a) => a.doctorId === doctor.id && a.date === format(selectedDate, "yyyy-MM-dd") && a.status !== "cancelled")
-      .map((a) => a.time);
-    return doctor.availableHours.filter((h) => !taken.includes(h));
+    if (!doctor.available_days.includes(dayName)) return [];
+    return doctor.available_hours;
   }, [doctor, selectedDate]);
 
   function validateForm() {
@@ -49,24 +70,40 @@ export default function Book() {
     return Object.keys(e).length === 0;
   }
 
-  function handleConfirm() {
-    if (!validateForm() || !doctor || !selectedDate || !selectedTime) return;
-    addAppointment({
-      id: `apt-${Date.now()}`,
-      patientName: form.name,
-      patientEmail: form.email,
-      patientPhone: form.phone,
-      doctorId: doctor.id,
-      doctorName: doctor.name,
-      specialty: doctor.specialty,
+  async function handleConfirm() {
+    if (!validateForm() || !doctor || !selectedDate || !selectedTime || !user) return;
+    setSubmitting(true);
+
+    const { error } = await supabase.from("appointments").insert({
+      user_id: user.id,
+      doctor_id: doctor.id,
+      patient_name: form.name,
+      patient_email: form.email,
+      patient_phone: form.phone,
       date: format(selectedDate, "yyyy-MM-dd"),
       time: selectedTime,
       status: "scheduled",
-      notes: form.notes,
-      createdAt: new Date().toISOString(),
+      notes: form.notes || null,
     });
-    setStep(4);
+
+    setSubmitting(false);
+
+    if (error) {
+      setErrors({ form: error.message });
+    } else {
+      setStep(4);
+    }
   }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-sm text-slate-500">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
@@ -140,7 +177,7 @@ export default function Book() {
                           {d.specialty}
                         </div>
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {d.availableDays.slice(0, 3).map((day) => (
+                          {d.available_days.slice(0, 3).map((day) => (
                             <span key={day} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
                               {day.slice(0, 3)}
                             </span>
@@ -180,7 +217,7 @@ export default function Book() {
                   <div className="mt-3 grid grid-cols-7 gap-2">
                     {weekDates.map((date) => {
                       const dayName = weekDays[date.getDay()];
-                      const available = doctor?.availableDays.includes(dayName) ?? false;
+                      const available = doctor?.available_days.includes(dayName) ?? false;
                       const selected = selectedDate ? isSameDay(date, selectedDate) : false;
                       return (
                         <button
@@ -344,12 +381,19 @@ export default function Book() {
                   </div>
                 </div>
 
+                {errors.form && (
+                  <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+                    {errors.form}
+                  </div>
+                )}
+
                 <div className="mt-8 flex justify-end">
                   <button
                     onClick={handleConfirm}
-                    className="inline-flex items-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.01] active:scale-[0.99]"
+                    disabled={submitting}
+                    className="inline-flex items-center gap-2 rounded-xl bg-teal-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Confirm Booking
+                    {submitting ? "Booking..." : "Confirm Booking"}
                     <CheckCircle size={16} />
                   </button>
                 </div>
@@ -397,6 +441,12 @@ export default function Book() {
                     </div>
                   </div>
                 </div>
+                <button
+                  onClick={() => navigate("/appointments")}
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-teal-700 px-6 py-3 text-sm font-semibold text-white shadow-md"
+                >
+                  View My Appointments
+                </button>
               </motion.div>
             )}
           </AnimatePresence>

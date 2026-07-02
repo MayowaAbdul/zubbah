@@ -135,7 +135,7 @@ export default function Home() {
         <div className="mx-auto max-w-6xl">
           <div className="text-center">
             <h2 className="text-3xl font-bold text-slate-900">
-              Why Choose ZUBBAH?
+              Why Choose MedSchedule?
             </h2>
             <p className="mt-3 text-slate-500">
               Built for patients, doctors, and administrators alike.
@@ -179,7 +179,7 @@ export default function Home() {
             Ready to streamline your healthcare experience?
           </h2>
           <p className="mt-3 text-slate-200">
-            Join thousands of patients and providers already using ZUBBAH.
+            Join thousands of patients and providers already using MedSchedule.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
@@ -202,7 +202,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-4 py-10 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-6xl text-center text-sm text-slate-400">
-          ZUBBAH &copy; {new Date().getFullYear()} — Patient Appointment Scheduling System.
+          MedSchedule &copy; {new Date().getFullYear()} — Patient Appointment Scheduling System.
         </div>
       </footer>
     </div>

@@ -1,13 +1,17 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { UserPlus, CheckCircle, Eye, EyeOff } from "lucide-react";
-import { addPatient, patients } from "../data/mockData";
+import { useAuth } from "../lib/auth";
+import { supabase } from "../lib/supabase";
 import { cn } from "../lib/utils";
 
 export default function Register() {
   const [submitted, setSubmitted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [registeredName, setRegisteredName] = useState("");
   const [form, setForm] = useState({
     fullName: "",
     email: "",
@@ -18,6 +22,8 @@ export default function Register() {
     emergencyContact: "",
     password: "",
   });
+  const { signUp } = useAuth();
+  const navigate = useNavigate();
 
   function validate() {
     const e: Record<string, string> = {};
@@ -34,21 +40,40 @@ export default function Register() {
     return Object.keys(e).length === 0;
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
-    addPatient({
-      id: `pat-${Date.now()}`,
-      fullName: form.fullName,
-      email: form.email,
-      phone: form.phone,
-      dateOfBirth: form.dateOfBirth,
-      gender: form.gender,
-      address: form.address,
-      emergencyContact: form.emergencyContact,
-      registeredAt: new Date().toISOString(),
-    });
+    setLoading(true);
+    setErrors({});
+
+    const { error: signUpError } = await signUp(form.email, password);
+    if (signUpError) {
+      setErrors({ form: signUpError.message });
+      setLoading(false);
+      return;
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { error: patientError } = await supabase.from('patients').insert({
+        user_id: user.id,
+        full_name: form.fullName,
+        phone: form.phone,
+        date_of_birth: form.dateOfBirth,
+        gender: form.gender,
+        address: form.address,
+        emergency_contact: form.emergencyContact,
+      });
+      if (patientError) {
+        setErrors({ form: patientError.message });
+        setLoading(false);
+        return;
+      }
+    }
+
+    setRegisteredName(form.fullName);
     setSubmitted(true);
+    setLoading(false);
   }
 
   if (submitted) {
@@ -64,12 +89,20 @@ export default function Register() {
           </div>
           <h2 className="mt-4 text-2xl font-bold text-slate-900">Registration Successful</h2>
           <p className="mt-2 text-sm text-slate-500">
-            Welcome, {patients[patients.length - 1]?.fullName}. Your account has been created.
+            Welcome, {registeredName}. Your account has been created.
           </p>
+          <button
+            onClick={() => navigate("/login")}
+            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-teal-700 px-6 py-3 text-sm font-semibold text-white shadow-md"
+          >
+            Go to Login
+          </button>
         </motion.div>
       </div>
     );
   }
+
+  const password = form.password;
 
   const fields = [
     { name: "fullName", label: "Full Name", type: "text", placeholder: "John Doe" },
@@ -162,12 +195,19 @@ export default function Register() {
               </div>
             </div>
 
+            {errors.form && (
+              <div className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+                {errors.form}
+              </div>
+            )}
+
             <button
               type="submit"
-              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.01] active:scale-[0.99]"
+              disabled={loading}
+              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-teal-700 px-6 py-3 text-sm font-semibold text-white shadow-md transition-transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <UserPlus size={18} />
-              Register Account
+              {loading ? "Creating account..." : "Register Account"}
             </button>
           </form>
         </div>

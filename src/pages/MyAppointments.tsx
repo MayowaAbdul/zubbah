@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CalendarDays,
@@ -19,7 +20,8 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { format, parseISO, addDays, startOfWeek, isSameDay } from "date-fns";
-import { appointments, doctors, updateAppointment, cancelAppointment, type Appointment } from "../data/mockData";
+import { supabase, type Appointment, type Doctor } from "../lib/supabase";
+import { useAuth } from "../lib/auth";
 import { cn } from "../lib/utils";
 
 const weekDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -31,10 +33,12 @@ const statusConfig = {
   rescheduled: { color: "bg-blue-50 text-blue-700 border-blue-200", icon: RefreshCw },
 };
 
+type AppointmentWithDoctor = Appointment & { doctor?: Doctor };
+
 export default function MyAppointments() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedApt, setSelectedApt] = useState<Appointment | null>(null);
+  const [selectedApt, setSelectedApt] = useState<AppointmentWithDoctor | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState<Date | null>(null);
@@ -42,19 +46,55 @@ export default function MyAppointments() {
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [cancelConfirm, setCancelConfirm] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [appointments, setAppointments] = useState<AppointmentWithDoctor[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    async function fetchData() {
+      if (!user) return;
+      const { data: appointmentsData, error: appointmentsError } = await supabase
+        .from("appointments")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+      const { data: doctorsData, error: doctorsError } = await supabase
+        .from("doctors")
+        .select("*");
+      if (!appointmentsError && appointmentsData && !doctorsError && doctorsData) {
+        const appointmentWithDoctors = appointmentsData.map((apt) => ({
+          ...apt,
+          doctor: doctorsData.find((d) => d.id === apt.doctor_id),
+        }));
+        setAppointments(appointmentWithDoctors);
+        setDoctors(doctorsData);
+      }
+      setLoading(false);
+    }
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user && !loading) {
+      navigate("/login");
+    }
+  }, [user, loading, navigate]);
 
   const filtered = useMemo(() => {
     return appointments
       .filter((a) => {
         const matchesSearch =
-          a.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          a.doctorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          a.specialty.toLowerCase().includes(searchQuery.toLowerCase());
+          a.patient_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          a.doctor?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          a.doctor?.specialty?.toLowerCase().includes(searchQuery.toLowerCase());
         const matchesStatus = statusFilter === "all" || a.status === statusFilter;
         return matchesSearch && matchesStatus;
-      })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [searchQuery, statusFilter]);
+      });
+  }, [searchQuery, statusFilter, appointments]);
 
   const stats = useMemo(() => {
     const total = appointments.length;
@@ -65,13 +105,13 @@ export default function MyAppointments() {
       (a) => a.status === "scheduled" && new Date(a.date) >= new Date()
     ).length;
     return { total, scheduled, completed, cancelled, upcoming };
-  }, []);
+  }, [appointments]);
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
   const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const upcomingDates = useMemo(() => {
-    const dates: Record<string, Appointment[]> = {};
+    const dates: Record<string, AppointmentWithDoctor[]> = {};
     appointments
       .filter((a) => a.status === "scheduled" || a.status === "rescheduled")
       .forEach((a) => {
@@ -79,23 +119,40 @@ export default function MyAppointments() {
         dates[a.date].push(a);
       });
     return dates;
-  }, []);
+  }, [appointments]);
 
-  function handleCancel(id: string) {
+  async function handleCancel(id: string) {
     if (!cancelReason.trim()) return;
-    cancelAppointment(id);
+    await supabase
+      .from("appointments")
+      .update({ status: "cancelled", notes: cancelReason })
+      .eq("id", id);
+    setAppointments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: "cancelled" } : a))
+    );
     setCancelConfirm(null);
     setCancelReason("");
   }
 
-  function handleReschedule(apt: Appointment) {
+  async function handleReschedule(apt: AppointmentWithDoctor) {
     if (!rescheduleDate || !rescheduleTime) return;
-    updateAppointment(apt.id, {
-      date: format(rescheduleDate, "yyyy-MM-dd"),
-      time: rescheduleTime,
-      status: "rescheduled",
-      notes: apt.notes + (rescheduleReason ? `\n[Rescheduled: ${rescheduleReason}]` : ""),
-    });
+    const newNotes = apt.notes + (rescheduleReason ? `\n[Rescheduled: ${rescheduleReason}]` : "");
+    await supabase
+      .from("appointments")
+      .update({
+        date: format(rescheduleDate, "yyyy-MM-dd"),
+        time: rescheduleTime,
+        status: "rescheduled",
+        notes: newNotes,
+      })
+      .eq("id", apt.id);
+    setAppointments((prev) =>
+      prev.map((a) =>
+        a.id === apt.id
+          ? { ...a, date: format(rescheduleDate, "yyyy-MM-dd"), time: rescheduleTime, status: "rescheduled" }
+          : a
+      )
+    );
     setShowReschedule(false);
     setRescheduleDate(null);
     setRescheduleTime(null);
@@ -107,12 +164,19 @@ export default function MyAppointments() {
     const doctor = doctors.find((d) => d.id === doctorId);
     if (!doctor) return [];
     const dayName = weekDays[date.getDay()];
-    if (!doctor.availableDays.includes(dayName)) return [];
-    const taken = appointments
-      .filter((a) => a.doctorId === doctorId && a.date === format(date, "yyyy-MM-dd") && a.status !== "cancelled")
-      .map((a) => a.time);
-    return doctor.availableHours.filter((h) => !taken.includes(h));
+    if (!doctor.available_days.includes(dayName)) return [];
+    return doctor.available_hours;
   }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-sm text-slate-500">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
@@ -221,9 +285,9 @@ export default function MyAppointments() {
         <div className="space-y-4">
           <AnimatePresence>
             {filtered.map((apt) => {
-              const cfg = statusConfig[apt.status];
-              const StatusIcon = cfg.icon;
-              const doctor = doctors.find((d) => d.id === apt.doctorId);
+              const cfg = statusConfig[apt.status as keyof typeof statusConfig];
+              const StatusIcon = cfg?.icon || Clock;
+              const doctor = apt.doctor;
               const isPast = new Date(apt.date) < new Date();
               const canReschedule = apt.status === "scheduled" && !isPast;
               const canCancel = apt.status === "scheduled" && !isPast;
@@ -240,14 +304,14 @@ export default function MyAppointments() {
                     <div className="flex items-start gap-4">
                       <img
                         src={doctor?.image}
-                        alt={apt.doctorName}
+                        alt={doctor?.name}
                         className="h-14 w-14 rounded-full object-cover"
                       />
                       <div>
-                        <div className="font-semibold text-slate-900">{apt.doctorName}</div>
+                        <div className="font-semibold text-slate-900">{doctor?.name}</div>
                         <div className="flex items-center gap-1 text-xs text-teal-700">
                           <Stethoscope size={12} />
-                          {apt.specialty}
+                          {doctor?.specialty}
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
                           <span className="flex items-center gap-1">
@@ -265,10 +329,10 @@ export default function MyAppointments() {
                         </div>
                         <div className="mt-2 flex items-center gap-3 text-xs text-slate-400">
                           <span className="flex items-center gap-1">
-                            <User size={12} /> {apt.patientName}
+                            <User size={12} /> {apt.patient_name}
                           </span>
                           <span className="flex items-center gap-1">
-                            <Phone size={12} /> {apt.patientPhone}
+                            <Phone size={12} /> {apt.patient_phone}
                           </span>
                         </div>
                         {apt.notes && (
@@ -284,7 +348,7 @@ export default function MyAppointments() {
                       <span
                         className={cn(
                           "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide",
-                          cfg.color
+                          cfg?.color || statusConfig.scheduled.color
                         )}
                       >
                         <StatusIcon size={12} />
@@ -421,13 +485,13 @@ export default function MyAppointments() {
               <div className="mt-5 space-y-4">
                 <div className="flex items-center gap-3">
                   <img
-                    src={doctors.find((d) => d.id === selectedApt.doctorId)?.image}
-                    alt={selectedApt.doctorName}
+                    src={selectedApt.doctor?.image}
+                    alt={selectedApt.doctor?.name}
                     className="h-12 w-12 rounded-full object-cover"
                   />
                   <div>
-                    <div className="font-semibold text-slate-900">{selectedApt.doctorName}</div>
-                    <div className="text-xs text-teal-600">{selectedApt.specialty}</div>
+                    <div className="font-semibold text-slate-900">{selectedApt.doctor?.name}</div>
+                    <div className="text-xs text-teal-600">{selectedApt.doctor?.specialty}</div>
                   </div>
                 </div>
 
@@ -442,15 +506,15 @@ export default function MyAppointments() {
                   </div>
                   <div className="flex items-center gap-2">
                     <User size={14} className="text-teal-600" />
-                    <span className="text-slate-600">{selectedApt.patientName}</span>
+                    <span className="text-slate-600">{selectedApt.patient_name}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Mail size={14} className="text-teal-600" />
-                    <span className="text-slate-600">{selectedApt.patientEmail}</span>
+                    <span className="text-slate-600">{selectedApt.patient_email}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Phone size={14} className="text-teal-600" />
-                    <span className="text-slate-600">{selectedApt.patientPhone}</span>
+                    <span className="text-slate-600">{selectedApt.patient_phone}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <MapPin size={14} className="text-teal-600" />
@@ -463,7 +527,7 @@ export default function MyAppointments() {
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold uppercase",
-                      statusConfig[selectedApt.status].color
+                      statusConfig[selectedApt.status as keyof typeof statusConfig]?.color
                     )}
                   >
                     {selectedApt.status}
@@ -478,7 +542,7 @@ export default function MyAppointments() {
                 )}
 
                 <div className="text-xs text-slate-400">
-                  Booked on {format(parseISO(selectedApt.createdAt), "MMMM d, yyyy 'at' h:mm a")}
+                  Booked on {format(parseISO(selectedApt.created_at), "MMMM d, yyyy 'at' h:mm a")}
                 </div>
               </div>
             </motion.div>
@@ -514,14 +578,14 @@ export default function MyAppointments() {
               </div>
 
               <p className="mt-2 text-sm text-slate-500">
-                Rescheduling {selectedApt.doctorName} — {selectedApt.specialty}
+                Rescheduling {selectedApt.doctor?.name} — {selectedApt.doctor?.specialty}
               </p>
 
               <div className="mt-5">
                 <div className="text-sm font-medium text-slate-700">Select a new date</div>
                 <div className="mt-2 grid grid-cols-7 gap-2">
                   {weekDates.map((date) => {
-                    const available = getAvailableTimes(selectedApt.doctorId, date).length > 0;
+                    const available = getAvailableTimes(selectedApt.doctor_id, date).length > 0;
                     const selected = rescheduleDate ? isSameDay(date, rescheduleDate) : false;
                     return (
                       <button
@@ -556,7 +620,7 @@ export default function MyAppointments() {
                 >
                   <div className="text-sm font-medium text-slate-700">Available times</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {getAvailableTimes(selectedApt.doctorId, rescheduleDate).map((t) => (
+                    {getAvailableTimes(selectedApt.doctor_id, rescheduleDate).map((t) => (
                       <button
                         key={t}
                         onClick={() => setRescheduleTime(t)}

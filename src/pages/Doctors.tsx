@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "react-router-dom";
 import {
@@ -16,7 +16,7 @@ import {
   Filter,
   Users,
 } from "lucide-react";
-import { doctors, appointments } from "../data/mockData";
+import { supabase, type Doctor } from "../lib/supabase";
 import { cn } from "../lib/utils";
 
 const specialties = [
@@ -43,6 +43,19 @@ export default function DoctorsPage() {
   const [search, setSearch] = useState("");
   const [selectedSpecialty, setSelectedSpecialty] = useState("All");
   const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchDoctors() {
+      const { data, error } = await supabase.from("doctors").select("*").order("name");
+      if (!error && data) {
+        setDoctors(data);
+      }
+      setLoading(false);
+    }
+    fetchDoctors();
+  }, []);
 
   const filtered = useMemo(() => {
     return doctors.filter((d) => {
@@ -53,7 +66,7 @@ export default function DoctorsPage() {
         selectedSpecialty === "All" || d.specialty === selectedSpecialty;
       return matchesSearch && matchesSpecialty;
     });
-  }, [search, selectedSpecialty]);
+  }, [search, selectedSpecialty, doctors]);
 
   const doctorDetail = doctors.find((d) => d.id === selectedDoctor);
 
@@ -62,7 +75,15 @@ export default function DoctorsPage() {
       total: doctors.length,
       specialties: new Set(doctors.map((d) => d.specialty)).size,
     };
-  }, []);
+  }, [doctors]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-sm text-slate-500">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-10 sm:px-6 lg:px-8">
@@ -143,9 +164,6 @@ export default function DoctorsPage() {
           className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3"
         >
           {filtered.map((d) => {
-            const apptCount = appointments.filter(
-              (a) => a.doctorId === d.id && a.status !== "cancelled"
-            ).length;
             return (
               <motion.div
                 key={d.id}
@@ -180,7 +198,7 @@ export default function DoctorsPage() {
                     Available Days
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {d.availableDays.map((day) => (
+                    {d.available_days.map((day) => (
                       <span
                         key={day}
                         className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-medium text-teal-700"
@@ -196,7 +214,7 @@ export default function DoctorsPage() {
                     Hours
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {d.availableHours.slice(0, 4).map((h) => (
+                    {d.available_hours.slice(0, 4).map((h) => (
                       <span
                         key={h}
                         className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600"
@@ -204,9 +222,9 @@ export default function DoctorsPage() {
                         {h}
                       </span>
                     ))}
-                    {d.availableHours.length > 4 && (
+                    {d.available_hours.length > 4 && (
                       <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                        +{d.availableHours.length - 4} more
+                        +{d.available_hours.length - 4} more
                       </span>
                     )}
                   </div>
@@ -214,7 +232,7 @@ export default function DoctorsPage() {
 
                 <div className="mt-4 flex items-center justify-between">
                   <div className="text-xs text-slate-500">
-                    {apptCount} appointments
+                    Available for booking
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -225,6 +243,7 @@ export default function DoctorsPage() {
                     </button>
                     <Link
                       to="/book"
+                      state={{ doctorId: d.id }}
                       className="inline-flex items-center gap-1 rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-800"
                     >
                       Book
@@ -342,7 +361,7 @@ export default function DoctorsPage() {
                 <div>
                   <div className="text-sm font-semibold text-slate-900">Availability</div>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    {doctorDetail.availableDays.map((day) => (
+                    {doctorDetail.available_days.map((day) => (
                       <div
                         key={day}
                         className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
@@ -351,7 +370,7 @@ export default function DoctorsPage() {
                         <div className="text-xs text-slate-700">
                           <div className="font-medium">{day}</div>
                           <div className="text-slate-400">
-                            {doctorDetail.availableHours[0]} - {doctorDetail.availableHours[doctorDetail.availableHours.length - 1]}
+                            {doctorDetail.available_hours[0]} - {doctorDetail.available_hours[doctorDetail.available_hours.length - 1]}
                           </div>
                         </div>
                       </div>
@@ -369,6 +388,7 @@ export default function DoctorsPage() {
                 </button>
                 <Link
                   to="/book"
+                  state={{ doctorId: doctorDetail.id }}
                   onClick={() => setSelectedDoctor(null)}
                   className="inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800"
                 >
