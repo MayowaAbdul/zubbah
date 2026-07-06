@@ -52,7 +52,7 @@ export default function Navbar() {
             <Stethoscope size={20} />
           </div>
           <span className="text-lg font-bold text-slate-900">
-            MedSchedule
+            ZUBBAH
           </span>
         </Link>
 
